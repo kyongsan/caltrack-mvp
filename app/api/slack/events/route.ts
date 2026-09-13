@@ -6,6 +6,10 @@ import { analyzeMealImage } from '@/lib/meal-ai';
 
 export const dynamic = 'force-dynamic';
 
+export async function GET() {
+  return NextResponse.json({ ok: true, route: 'slack-events' });
+}
+
 function db() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -95,8 +99,12 @@ export async function POST(req: Request) {
     return new NextResponse('invalid json', { status: 400 });
   }
 
-  if (body.type === 'url_verification' && body.challenge) {
-    return NextResponse.json({ challenge: body.challenge });
+  // Slack's URL verification only needs the challenge value echoed back.
+  if (body.type === 'url_verification' && typeof body.challenge === 'string') {
+    return new NextResponse(body.challenge, {
+      status: 200,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
   }
 
   if (!verifySlackSignature(raw, req.headers.get('x-slack-request-timestamp'), req.headers.get('x-slack-signature'))) {
