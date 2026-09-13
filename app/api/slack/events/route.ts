@@ -88,11 +88,21 @@ async function processEvent(event: any) {
 
 export async function POST(req: Request) {
   const raw = await req.text();
+  let body: any;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return new NextResponse('invalid json', { status: 400 });
+  }
+
+  if (body.type === 'url_verification' && body.challenge) {
+    return NextResponse.json({ challenge: body.challenge });
+  }
+
   if (!verifySlackSignature(raw, req.headers.get('x-slack-request-timestamp'), req.headers.get('x-slack-signature'))) {
     return new NextResponse('invalid signature', { status: 401 });
   }
-  const body = JSON.parse(raw);
-  if (body.type === 'url_verification') return NextResponse.json({ challenge: body.challenge });
+
   if (body.type === 'event_callback') {
     after(async () => {
       try { await processEvent(body.event); } catch (e) { console.error('Slack event failed', e); }
