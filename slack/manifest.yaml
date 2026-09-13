@@ -13,7 +13,7 @@ oauth_config:
       - app_mentions:read
 settings:
   event_subscriptions:
-    request_url: https://caltrack-mvp-haaanco.vercel.app/api/slack/events
+    request_url: https://caltrack-mvp-haaanco.vercel.app/api/slack/events?v=2
     bot_events:
       - message.im
       - app_mention
