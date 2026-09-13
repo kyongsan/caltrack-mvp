@@ -1,0 +1,24 @@
+display_information:
+  name: CalTrack
+features:
+  bot_user:
+    display_name: CalTrack
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - files:read
+      - im:history
+      - app_mentions:read
+settings:
+  event_subscriptions:
+    request_url: https://caltrack-mvp-haaanco.vercel.app/api/slack/events
+    bot_events:
+      - message.im
+      - app_mention
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
