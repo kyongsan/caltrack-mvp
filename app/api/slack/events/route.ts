@@ -1,7 +1,7 @@
 import { after } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { verifySlackSignature, postSlackMessage, downloadSlackFile } from '@/lib/slack';
+import { verifySlackSignature, postSlackMessage, downloadSlackFile, slackWorkspaceId } from '@/lib/slack';
 import { analyzeMealImage } from '@/lib/meal-ai';
 import { tokyoDate, dayBounds } from '@/lib/balance';
 
@@ -118,9 +118,12 @@ export async function POST(req: Request) {
     });
   }
 
-  if (body.type === 'event_callback' && typeof body.event_id === 'string' && process.env.SLACK_WORKSPACE_ID && body.team_id === process.env.SLACK_WORKSPACE_ID) {
+  if (body.type === 'event_callback' && typeof body.event_id === 'string' && typeof body.team_id === 'string') {
     after(async () => {
-      try { await processEvent(body.event, body.event_id); } catch { console.error('Slack event processing failed'); }
+      try {
+        if (body.team_id !== await slackWorkspaceId()) return;
+        await processEvent(body.event, body.event_id);
+      } catch { console.error('Slack event processing failed'); }
     });
   }
   return NextResponse.json({ ok: true });

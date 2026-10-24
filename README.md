@@ -30,7 +30,7 @@ Enable email authentication in Supabase, set Site URL to the production app, and
 
 ## Slack
 
-Configure `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_WORKSPACE_ID`, `SLACK_USER_ID` and `APP_OWNER_EMAIL`. This explicitly links the allowed Slack identity with the pre-provisioned web profile. Set Slack's event URL to `/api/slack/events`; `/api/slack/verify` remains a compatible alias. Both validate signatures. Existing scopes and events are in `slack/manifest.yaml`.
+Configure `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_USER_ID` and `APP_OWNER_EMAIL`. `SLACK_WORKSPACE_ID` is optional; when absent the server verifies the workspace against the configured bot with Slack auth.test. This explicitly links the allowed Slack identity with the pre-provisioned web profile. Set Slack's event URL to `/api/slack/events`; `/api/slack/verify` remains a compatible alias. Both validate signatures. Existing scopes and events are in `slack/manifest.yaml`.
 
 Photo messages are estimated and saved through the existing bot flow. Web text/photo estimates require confirmation before saving. Message retries and overlapping message/app-mention deliveries share a unique message key; database uniqueness prevents duplicate meals. No live Slack messages were sent during testing. Slack natural-language corrections and automatic posting schedules remain future work.
 
@@ -40,4 +40,6 @@ Local tests cover Tokyo midnight, missing values, energy double counting, remove
 
 An actual database transaction verified meal insertion, correction, idempotency and soft deletion, then rolled back. Anonymous/authenticated direct table grants were checked to be absent. Security advisors returned only informational findings for intentional RLS-with-no-policy tables.
 
-Production/preview deployment and browser-to-database verification are pending Vercel team access approval. Verify runtime environment names, production login/redirect, and a real meal save → reload → correction → deletion after deployment. AI and Slack live integrations have not been exercised with production credentials.
+Vercel team access is authorized. The publishable Supabase key and owner profile configuration have been added to the deployment environments. A real temporary Auth identity verified sign-in, rejection before profile provisioning, and an authenticated initial read; test identities were removed.
+
+Email login is still blocked by the existing Supabase URL configuration: redirects currently fall back to localhost:3000. Set Site URL to https://caltrack-mvp-haaanco.vercel.app and allow https://caltrack-mvp-haaanco.vercel.app/dashboard in Authentication > URL Configuration. This change requires access to the Supabase dashboard. Complete browser-to-database verification after correcting it. No live Slack messages were sent.
