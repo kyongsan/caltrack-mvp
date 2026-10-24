@@ -1,18 +1,113 @@
-export default function Dashboard(){
+'use client';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
+import { tokyoDate, shiftDay, summary, csvCell, type Meal, type Weight, type Energy } from '@/lib/balance';
+import type { MealAnalysis } from '@/lib/meal-ai';
+
+type Medication = { id:string; name:string; default_dose:number; unit:string };
+type Records = { meals:Meal[]; weights:Weight[]; energy:Energy[]; medications:Medication[]; medication_logs:{medication_id:string}[]; profile:{target_intake_kcal:number|null} };
+const mealNames:Record<string,string> = {breakfast:'朝食',lunch:'昼食',dinner:'夕食',snack:'間食・飲み物'};
+const n=(v:number)=>v.toLocaleString('ja-JP');
+const signed=(v:number)=>`${v>0?'+':v<0?'−':''}${n(Math.abs(v))}`;
+function dateTime(date:string) { const now=new Date(); return `${date}T${new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hour12:false}).format(now)}`; }
+
+export default function Dashboard() {
+  const [client,setClient]=useState<SupabaseClient|null>(null), [session,setSession]=useState<Session|null>(null), [ready,setReady]=useState(false);
+  const [email,setEmail]=useState(''),[loginSent,setLoginSent]=useState(false),[password,setPassword]=useState('');
+  const [date,setDate]=useState(tokyoDate()),[tab,setTab]=useState<'today'|'history'|'settings'>('today');
+  const [data,setData]=useState<Records|null>(null),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const [text,setText]=useState(''),[kcal,setKcal]=useState(''),[mealType,setMealType]=useState('dinner'),[time,setTime]=useState(dateTime(tokyoDate()));
+  const [image,setImage]=useState<string>(),[analysis,setAnalysis]=useState<MealAnalysis|null>(null),[fraction,setFraction]=useState(1),[edit,setEdit]=useState<string>();
+  const [weight,setWeight]=useState(''),[bodyFat,setBodyFat]=useState(''),[energy,setEnergy]=useState(''),[estimated,setEstimated]=useState(false),[target,setTarget]=useState('');
+  const [deleteId,setDeleteId]=useState<string>();
+  const [medName,setMedName]=useState(''),[medDose,setMedDose]=useState(''),[medUnit,setMedUnit]=useState('mg');
+  const mutationKeys=useRef<Record<string,{payload:string;id:string}>>({});
+  const requestId=useRef<string|null>(null), loadVersion=useRef(0), photoRef=useRef<HTMLInputElement>(null);
+  const token=session?.access_token;
+  useEffect(()=>{
+    let active=true, unsubscribe:(()=>void)|undefined;
+    (async()=>{try{
+      const config=await fetch('/api/config').then(r=>r.json());
+      if(!config.url||!config.key)throw new Error('ログイン機能の接続設定が未完了です。設定完了後にこのページを再読み込みしてください。');
+      const c=createClient(config.url,config.key); if(!active)return; setClient(c);
+      const {data:{session:s},error:e}=await c.auth.getSession(); if(e)throw e; if(active){setSession(s);setReady(true);}
+      const {data:{subscription}}=c.auth.onAuthStateChange((_event,s)=>{if(active){setSession(s); if(!s)setData(null);}}); unsubscribe=()=>subscription.unsubscribe();
+      if(window.location.hash.includes('access_token'))history.replaceState(null,'',window.location.pathname);
+    }catch(e){if(active){setError(e instanceof Error?e.message:'接続できませんでした');setReady(true);}}})();
+    return()=>{active=false;unsubscribe?.();};
+  },[]);
+  const api=useCallback(async(path:string, options:RequestInit={})=>{
+    const response=await fetch(path,{...options,headers:{'Content-Type':'application/json',Authorization:`Bearer ${token || ''}`,...options.headers},cache:'no-store'});
+    const body=await response.json(); if(!response.ok)throw new Error(body.error || '処理に失敗しました'); return body;
+  },[token]);
+  const reload=useCallback(async()=>{
+    const version=++loadVersion.current; setLoading(true);
+    try{const next=await api(`/api/records?date=${date}`);if(version===loadVersion.current){setData(next);setTarget(next.profile.target_intake_kcal?.toString()||'');}}
+    catch(e){if(version===loadVersion.current){setData(null);setError(e instanceof Error?e.message:'読み込みに失敗しました');}}
+    finally{if(version===loadVersion.current)setLoading(false);}
+  },[api,date]);
+  useEffect(()=>{setData(null);setError('');if(token)void reload();return()=>{loadVersion.current++;};},[token,reload]);
+  useEffect(()=>{setTime(dateTime(date));},[date]);
+  function mutationId(kind:string,payload:unknown){const serialized=JSON.stringify(payload);const prior=mutationKeys.current[kind];if(prior?.payload===serialized)return prior.id;const id=crypto.randomUUID();mutationKeys.current[kind]={payload:serialized,id};return id;}
+  async function run(action:()=>Promise<void>){setBusy(true);setError('');setNotice('');try{await action();}catch(e){setError(e instanceof Error?e.message:'処理に失敗しました');}finally{setBusy(false);}}
+  function resetMeal(){setText('');setKcal('');setImage(undefined);setAnalysis(null);setEdit(undefined);setFraction(1);requestId.current=null;setTime(dateTime(date));if(photoRef.current)photoRef.current.value='';}
+  function mealChanged(){requestId.current=null;setAnalysis(null);setFraction(1);}
+  async function selectPhoto(file?:File){if(!file)return; await run(async()=>{
+    if(!file.type.startsWith('image/'))throw new Error('画像ファイルを選んでください');
+    const url=URL.createObjectURL(file);try{const img=await new Promise<HTMLImageElement>((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=()=>reject(new Error('写真を読み込めません。JPEG・PNG形式をお試しください'));img.src=url;});
+      const canvas=document.createElement('canvas'),scale=Math.min(1,1400/Math.max(img.width,img.height));canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);const context=canvas.getContext('2d');if(!context)throw new Error('写真を読み込めません');context.drawImage(img,0,0,canvas.width,canvas.height);const result=canvas.toDataURL('image/jpeg',.8);if(result.length>3500000)throw new Error('写真が大きすぎます。小さい写真を選んでください');setImage(result);mealChanged();
+    }finally{URL.revokeObjectURL(url);}
+  });}
+  function changeFraction(value:number){setFraction(value);if(analysis)setKcal(String(Math.round(analysis.total_kcal*value)));requestId.current=null;}
+  async function saveMeal(e:FormEvent){e.preventDefault();await run(async()=>{
+    if(!kcal.trim() || !Number.isFinite(Number(kcal)))throw new Error('推定するか、カロリーを入力してください');
+    requestId.current ||= crypto.randomUUID();
+    await api('/api/records',{method:'POST',body:JSON.stringify({kind:'meal',id:edit,request_id:requestId.current,eaten_at:new Date(time+'+09:00').toISOString(),original_text:text,meal_type:mealType,total_kcal:Number(kcal),protein_g:analysis?.protein_g==null?null:analysis.protein_g*fraction,fat_g:analysis?.fat_g==null?null:analysis.fat_g*fraction,carbs_g:analysis?.carbs_g==null?null:analysis.carbs_g*fraction})});
+    resetMeal();setNotice(edit?'食事の記録を更新しました':'食事を保存しました');await reload();
+  });}
+  function startEdit(meal:Meal){setEdit(meal.id);setText(meal.original_text||'食事');setKcal(String(meal.total_kcal));setMealType(meal.meal_type||'dinner');setTime(`${tokyoDate(new Date(meal.eaten_at))}T${new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(meal.eaten_at))}`);setImage(undefined);setAnalysis(null);requestId.current=null;document.getElementById('meal-entry')?.scrollIntoView({behavior:'smooth'});}
+  const daily=data?summary(data.meals,data.energy,date,data.profile.target_intake_kcal===null?null:Number(data.profile.target_intake_kcal)):null;
+  const todayMeals=data?.meals.filter(m=>tokyoDate(new Date(m.eaten_at))===date)||[];
+  const latestWeight=data?.weights.at(-1);
+  function exportCsv(){if(!data)return;const rows=[['日時（日本時間）','食事区分','食事内容','kcal','たんぱく質g','脂質g','炭水化物g'],...data.meals.map(m=>[new Date(m.eaten_at).toLocaleString('sv-SE',{timeZone:'Asia/Tokyo'}),mealNames[m.meal_type||'']||'',m.original_text,m.total_kcal,m.protein_g,m.fat_g,m.carbs_g])];const url=URL.createObjectURL(new Blob(['\uFEFF'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=`caltrack-${date}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+
   return <main className="shell">
-    <div className="nav"><a href="/">Home</a><a href="/setup">Setup</a></div>
-    <p className="muted">2026年9月13日</p>
-    <section className="card">
-      <div className="muted">今日のカロリー収支</div>
-      <div className="big">−320 kcal</div>
-      <div className="grid"><div><div className="muted">摂取</div><b>1,780 kcal</b></div><div><div className="muted">現在までの消費</div><b>2,100 kcal</b></div></div>
-    </section>
-    <section className="card">
-      <div className="muted">今日あと食べられる目安</div>
-      <div className="big">220 kcal</div>
-      <p className="muted">予測総消費 2,400 kcal / 今日の目標 −400 kcal</p>
-    </section>
-    <section className="card"><h2>9月の進捗</h2><p><b>−0.6 kg / −1.5 kg</b></p><div className="bar"><div /></div><p className="muted">体重進捗 40%　｜　日数進捗 43%</p></section>
-    <section className="card"><h2>次の接続</h2><p>Supabase・OpenAI・Slackを接続すると、ここが実データに切り替わります。</p></section>
-  </main>
+    <header className="header"><a href="/dashboard" className="brand"><span className="brand-icon">C</span>CalTrack<span className="brand-label">日々の、ちょうどいいを。</span></a>{session&&<button className="quiet" onClick={()=>void run(async()=>{await client?.auth.signOut();setNotice('ログアウトしました');})} disabled={busy}>ログアウト</button>}</header>
+    <div aria-live="polite">{error&&<div role="alert" className="message error">{error}</div>}{notice&&<div role="status" className="message success">{notice}</div>}</div>
+    {!ready?<section className="card">接続を確認しています…</section>:!session?<section className="card login"><p className="eyebrow">YOUR DAILY BALANCE</p><h1>食べたものを記録。<br/>一日のバランスを知る。</h1><p className="muted">食事・体重・消費カロリーをまとめて振り返る、あなた専用のノート。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{if(!client)throw new Error('接続設定が未完了です');const {error}=password?await client.auth.signInWithPassword({email,password}):await client.auth.signInWithOtp({email,options:{emailRedirectTo:window.location.origin+'/dashboard'}});if(error)throw new Error('ログインできませんでした。メールアドレス・パスワードや接続設定を確認してください');if(!password){setLoginSent(true);setNotice('ログイン用メールを送りました。メール内のリンクをこの端末で開いてください。');}});}}><label>メールアドレス<input type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="登録したメールアドレス"/></label><details><summary>パスワードでログイン</summary><label>パスワード<input type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)}/></label></details><button className="primary full" disabled={!client||busy}>{busy?'接続中…':password?'ログイン':loginSent?'ログインメールを再送':'メールでログイン'}</button></form><p className="small muted">登録済みのアカウントだけが記録を閲覧できます。</p></section>:<>
+    <nav className="tabs" aria-label="メインメニュー">{(['today','history','settings'] as const).map(t=><button key={t} aria-current={tab===t?'page':undefined} className={tab===t?'selected':''} onClick={()=>setTab(t)} disabled={busy}>{({today:'今日の記録',history:'振り返り',settings:'目標・設定'})[t]}</button>)}</nav>
+    <div className="day-header"><div><p className="eyebrow">{tab==='history'?'YOUR PROGRESS':'DAILY JOURNAL'}</p><h1>{tab==='settings'?'自分のペースをつくる':tab==='history'?'小さな記録を、変化に。':'今日のバランス'}</h1></div><label className="date-picker"><span className="sr-only">表示日（日本時間）</span><input type="date" value={date} max={tokyoDate()} disabled={busy} onChange={e=>{if(e.target.value){setDate(e.target.value);resetMeal();}}}/></label></div>
+    {loading?<section className="card">記録を読み込んでいます…</section>:!data||!daily?<section className="card"><p>記録を読み込めませんでした。</p><button disabled={busy} onClick={()=>void reload()}>再読み込み</button></section>:<>
+    {tab==='today'&&<>
+      <section className="balance-card"><div><p className="eyebrow">記録済みのカロリー収支</p><div className="balance-value">{daily.balance===null?'—':signed(daily.balance)}<span>kcal</span></div><p className="balance-caption">{daily.expenditure===null?'総消費を入力すると収支を表示します':`${daily.isEstimated?'推定の':'入力した'}一日の総消費との差`}</p></div><div className="balance-details"><div><span>摂取カロリー</span><strong>{n(daily.intake)} <small>kcal</small></strong></div><div><span>一日の総消費</span><strong>{daily.expenditure===null?'未入力':n(daily.expenditure)} <small>{daily.expenditure!==null?'kcal':''}</small></strong></div><div><span>目標までの残り</span><strong>{daily.remaining===null?'未設定':daily.remaining<0?`${n(-daily.remaining)} 超過`:n(daily.remaining)} <small>{daily.remaining!==null?'kcal':''}</small></strong></div></div></section>
+      <p className="small muted balance-note">記録した食事と総消費から計算します。食事が未記録の場合、実際の収支とは異なります。</p>
+      <div className="main-grid"><div>
+      <section className="card" id="meal-entry"><div className="section-title"><div><p className="eyebrow">MEAL NOTE</p><h2>{edit?'食事の記録を修正':'食事を記録する'}</h2></div><span className="tag">写真・文章・手入力</span></div>
+      <form onSubmit={saveMeal}><fieldset disabled={busy}><label>食べたもの・量<textarea value={text} maxLength={2000} required onChange={e=>{setText(e.target.value);mealChanged();}} placeholder="例：スンデクッパ定食。ご飯は半分、スープは1/3残した" rows={3}/></label>
+        <div className="photo-row"><label className="photo-button"><span>＋ 写真を追加</span><input ref={photoRef} type="file" accept="image/*" onChange={e=>void selectPhoto(e.target.files?.[0])}/></label><button type="button" className="secondary" disabled={(!text.trim()&&!image)||busy} onClick={()=>void run(async()=>{const result=await api('/api/meals/analyze',{method:'POST',body:JSON.stringify({text,image})});setAnalysis(result.analysis);if(!text.trim())setText(result.analysis.items.map((item:{name:string})=>item.name).join('、'));setKcal(String(result.analysis.total_kcal));setFraction(1);requestId.current=null;if(result.analysis.meal_type!=='unknown')setMealType(result.analysis.meal_type);})}>{busy?'処理中…':'カロリーを推定'}</button></div>
+        {image&&<div className="photo-preview"><img src={image} alt="解析用に選んだ食事の写真"/><button type="button" className="quiet" onClick={()=>{setImage(undefined);mealChanged();}}>写真を外す</button></div>}
+        {analysis&&<div className="estimate"><strong>推定した内訳</strong>{analysis.items.map((item,i)=><div key={i}><div className="estimate-line"><span>{item.name}</span><b>{n(Math.round(item.kcal*fraction))} kcal</b></div>{item.assumption&&<p className="small muted">{item.assumption}</p>}</div>)}<label>食べた割合<select value={fraction} onChange={e=>changeFraction(Number(e.target.value))}><option value={1}>推定量を全部</option><option value={.75}>3/4</option><option value={.5}>半分</option><option value={1/3}>1/3</option><option value={.25}>1/4</option></select></label><p className="small muted">写真からの値は目安です。量と合計を確認してから保存してください。</p></div>}
+        <div className="form-grid"><label>合計カロリー（kcal）<input type="number" inputMode="decimal" min="0" max="20000" step="any" value={kcal} required placeholder="例：650" onChange={e=>{setKcal(e.target.value);setAnalysis(null);requestId.current=null;}}/></label><label>食事区分<select value={mealType} onChange={e=>{setMealType(e.target.value);requestId.current=null;}}>{Object.entries(mealNames).map(([key,name])=><option key={key} value={key}>{name}</option>)}</select></label><label className="wide">食べた日時（日本時間）<input type="datetime-local" required value={time} onChange={e=>{setTime(e.target.value);requestId.current=null;}}/></label></div>
+        <button className="primary full" type="submit" disabled={busy}>{busy?'処理中…':edit?'修正を保存':'確認して保存'}</button>{edit&&<button className="quiet full" type="button" onClick={resetMeal}>修正をキャンセル</button>}
+        <p className="small muted">写真は推定にのみ使い、アプリには保存しません。</p>
+      </fieldset></form></section>
+      <section className="card"><div className="section-title"><h2>食事の記録</h2><span className="muted small">{todayMeals.length}件</span></div>{todayMeals.length===0?<div className="empty"><span>＋</span><p>まだ食事の記録がありません</p><p className="small muted">飲み物や間食も、気軽にひとつずつ。</p></div>:todayMeals.map(meal=><article className="meal" key={meal.id}><div className="meal-meta"><span>{mealNames[meal.meal_type||'']||'食事'} · {new Date(meal.eaten_at).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'})}</span><strong>{n(Number(meal.total_kcal))}<small> kcal</small></strong></div><p>{meal.original_text||'食事'}</p><div className="meal-actions"><span className="small muted">{meal.source==='slack'?'Slackから記録':'Webから記録'}</span><div><button className="quiet" disabled={busy} onClick={()=>startEdit(meal)}>修正</button><button className="quiet danger" disabled={busy} onClick={()=>setDeleteId(meal.id)}>削除</button></div></div>{deleteId===meal.id&&<div className="confirm" role="group" aria-label="削除の確認"><p>この食事を削除しますか？</p><button type="button" className="danger" disabled={busy} onClick={()=>void run(async()=>{await api('/api/records',{method:'DELETE',body:JSON.stringify({id:meal.id})});setDeleteId(undefined);setNotice('食事の記録を削除しました');if(edit===meal.id)resetMeal();await reload();})}>削除する</button><button type="button" disabled={busy} onClick={()=>setDeleteId(undefined)}>キャンセル</button></div>}</article>)}</section>
+      </div><aside>
+      <section className="card"><p className="eyebrow">BODY LOG</p><h2>体重を記録</h2><div className="weight-value">{latestWeight?n(Number(latestWeight.weight_kg)):'—'}<span>kg</span></div><p className="small muted">{latestWeight?`${tokyoDate(new Date(latestWeight.measured_at))} の記録`:'最初の記録から始めましょう'}</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'weight',request_id:mutationId('weight',{date,weight,bodyFat}),measured_at:new Date(dateTime(date)+'+09:00').toISOString(),weight_kg:Number(weight),body_fat_pct:bodyFat?Number(bodyFat):null})});delete mutationKeys.current.weight;setWeight('');setBodyFat('');setNotice('体重を保存しました');await reload();});}}><fieldset disabled={busy}><div className="form-grid"><label>体重（kg）<input type="number" inputMode="decimal" required min="20" max="400" step=".1" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="例：73.3"/></label><label>体脂肪（%）<input type="number" inputMode="decimal" min="0" max="80" step=".1" value={bodyFat} onChange={e=>setBodyFat(e.target.value)} placeholder="任意"/></label></div><button type="submit" className="secondary full">体重を保存</button></fieldset></form></section>
+      <section className="card"><p className="eyebrow">ENERGY LOG</p><h2>一日の総消費</h2><p className="small muted">Apple Watchなどの「安静時＋アクティブ」の一日分の合計を入力してください。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'energy',request_id:mutationId('energy',{date,energy,estimated}),date,value_kcal:Number(energy),is_estimated:estimated})});delete mutationKeys.current.energy;setEnergy('');setNotice('総消費を保存しました');await reload();});}}><fieldset disabled={busy}><label>総消費カロリー（kcal）<input type="number" inputMode="numeric" required min="100" max="20000" value={energy} onChange={e=>setEnergy(e.target.value)} placeholder="例：2400"/></label><label className="check"><input type="checkbox" checked={estimated} onChange={e=>setEstimated(e.target.checked)}/>推定値として記録</label><button type="submit" className="secondary full">総消費を保存</button></fieldset></form></section>
+      <section className="card"><p className="eyebrow">MEDICATION LOG</p><h2>服薬の記録</h2>{data.medications.length===0?<p className="small muted">服薬の設定はまだありません。</p>:data.medications.map(m=><div key={m.id} className="medication"><p>{m.name} {m.default_dose}{m.unit}</p><button className="secondary full" disabled={busy||data.medication_logs.some(l=>l.medication_id===m.id)} onClick={()=>void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'medication',request_id:mutationId('medication',{date,id:m.id}),medication_id:m.id,taken_at:new Date(dateTime(date)+'+09:00').toISOString(),dose:Number(m.default_dose)})});setNotice('服薬を記録しました');await reload();})}>{data.medication_logs.some(l=>l.medication_id===m.id)?'✓ 記録済み':'服用したことを記録'}</button></div>)}<p className="small muted">服薬は記録用です。カロリー収支への加算・減算は行いません。</p></section>
+      </aside></div>
+    </>}
+    {tab==='history'&&<><div className="history-grid"><section className="card"><p className="eyebrow">LAST 30 DAYS</p><h2>体重の推移</h2>{data.weights.length<2?<div className="empty">2回以上記録すると、変化をグラフで表示します。</div>:<WeightChart weights={data.weights}/>}</section><section className="card"><p className="eyebrow">LAST 7 DAYS</p><h2>摂取カロリーの推移</h2><div className="bars">{Array.from({length:7},(_,i)=>shiftDay(date,i-6)).map(day=>{const s=summary(data.meals,data.energy,day,null);const max=Math.max(2500,...data.meals.map(m=>Number(m.total_kcal)));return <div className="bar-day" key={day}><span>{s.mealCount?n(s.intake):'—'}</span><div className="bar-track"><div style={{height:`${s.mealCount?Math.max(2,Math.min(100,s.intake/max*100)):0}%`}}/></div><small>{day.slice(5)}</small></div>;})}</div><p className="small muted">— は食事未記録。単位：kcal</p></section></div><section className="card"><div className="section-title"><h2>日別の記録</h2><button className="secondary" onClick={exportCsv}>食事CSVを書き出す</button></div><div className="table-scroll"><table><thead><tr><th>日付</th><th>摂取</th><th>総消費</th><th>収支</th><th>体重</th></tr></thead><tbody>{Array.from({length:30},(_,i)=>shiftDay(date,-i)).map(day=>{const s=summary(data.meals,data.energy,day,null);const w=data.weights.filter(w=>tokyoDate(new Date(w.measured_at))===day).at(-1);return <tr key={day}><th>{day.slice(5)}</th><td>{s.mealCount?n(s.intake):'—'}</td><td>{s.expenditure===null?'—':n(s.expenditure)}</td><td>{s.balance===null||!s.mealCount?'—':signed(s.balance)}</td><td>{w?`${n(Number(w.weight_kg))} kg`:'—'}</td></tr>;})}</tbody></table></div><p className="small muted">選択日までの30日分を表示。カロリーは記録済みの食事を集計しています。</p></section></>}
+    {tab==='settings'&&<section className="card settings"><p className="eyebrow">YOUR OWN PACE</p><h2>一日の摂取目標</h2><p className="muted">設定した目標と記録済みの摂取量との差を表示します。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'settings',target_intake_kcal:target?Number(target):null})});setNotice('目標を保存しました');await reload();});}}><fieldset disabled={busy}><label>目標（kcal／日）<input type="number" inputMode="numeric" min="1000" max="10000" value={target} onChange={e=>setTarget(e.target.value)} placeholder="未設定"/></label><button className="primary" type="submit">目標を保存</button></fieldset></form><p className="small muted">空欄で保存すると目標を解除します。ここでは自動で減量目標を決めません。</p><hr/><h2>服薬の設定</h2><p className="small muted">服用を記録する薬と、通常の1回量を登録します。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'medication_definition',request_id:mutationId('medication_definition',{medName,medDose,medUnit}),name:medName,default_dose:Number(medDose),unit:medUnit})});delete mutationKeys.current.medication_definition;setMedName('');setMedDose('');setNotice('服薬の設定を保存しました');await reload();});}}><fieldset disabled={busy}><label>薬の名前<input required maxLength={120} value={medName} onChange={e=>setMedName(e.target.value)}/></label><div className="form-grid"><label>1回量<input type="number" required min="0" max="100000" step="any" inputMode="decimal" value={medDose} onChange={e=>setMedDose(e.target.value)}/></label><label>単位<input required maxLength={20} value={medUnit} onChange={e=>setMedUnit(e.target.value)}/></label></div><button className="secondary" type="submit">服薬の設定を追加</button></fieldset></form><hr/><h2>データの扱い</h2><p className="muted">日時はすべて日本時間で集計。記録はアカウントに紐づけて保存します。食事写真は推定のためにOpenAIへ送信し、アプリ内には保存しません。</p><a className="text-link" href="/setup">接続状態を見る →</a></section>}
+    </>}
+    </>}
+    <footer>CalTrack <span>続けられる記録から、毎日を整える。</span></footer>
+  </main>;
+}
+function WeightChart({weights}:{weights:Weight[]}){
+  const values=weights.map(w=>Number(w.weight_kg)),min=Math.min(...values)-.5,max=Math.max(...values)+.5;
+  const start=Date.parse(weights[0].measured_at),duration=Math.max(1,Date.parse(weights.at(-1)!.measured_at)-start);
+  const points=weights.map(w=>`${40+(Date.parse(w.measured_at)-start)/duration*400},${170-(Number(w.weight_kg)-min)/(max-min)*130}`).join(' ');
+  return <><svg viewBox="0 0 480 210" className="weight-chart" role="img" aria-label={`体重推移。${tokyoDate(new Date(weights[0].measured_at))}の${values[0]}kgから、${tokyoDate(new Date(weights.at(-1)!.measured_at))}の${values.at(-1)}kg`}>{[0,.5,1].map(v=><g key={v}><line x1="40" x2="440" y1={170-v*130} y2={170-v*130} stroke="#e6ece8"/><text x="5" y={174-v*130} fontSize="11" fill="#67766d">{(min+v*(max-min)).toFixed(1)}</text></g>)}<polyline points={points} fill="none" stroke="#37775e" strokeWidth="3" strokeLinejoin="round"/>{weights.map(w=><circle key={w.id} cx={40+(Date.parse(w.measured_at)-start)/duration*400} cy={170-(Number(w.weight_kg)-min)/(max-min)*130} r="3" fill="#37775e"/>)}<text x="40" y="198" fontSize="11" fill="#67766d">{tokyoDate(new Date(weights[0].measured_at)).slice(5)}</text><text x="408" y="198" fontSize="11" fill="#67766d">{tokyoDate(new Date(weights.at(-1)!.measured_at)).slice(5)}</text></svg><p className="small muted">記録した体重を表示（kg）。記録間を線で結んでいます。</p></>;
 }

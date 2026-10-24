@@ -30,9 +30,14 @@ export async function postSlackMessage(channel: string, text: string, threadTs?:
 export async function downloadSlackFile(url: string) {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) throw new Error('SLACK_BOT_TOKEN is not configured');
-  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'files.slack.com') throw new Error('Invalid Slack file URL');
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`Slack file download failed: ${res.status}`);
+  if (Number(res.headers.get('content-length') || 0) > 10000000) throw new Error('Slack image too large');
   const bytes = Buffer.from(await res.arrayBuffer());
-  const type = res.headers.get('content-type') || 'image/jpeg';
+  if (bytes.length > 10000000) throw new Error('Slack image too large');
+  const type = (res.headers.get('content-type') || '').split(';')[0];
+  if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(type)) throw new Error('Unsupported image');
   return `data:${type};base64,${bytes.toString('base64')}`;
 }
