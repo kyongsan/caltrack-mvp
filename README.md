@@ -34,12 +34,14 @@ Configure `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_USER_ID` and `APP_OW
 
 Photo messages are estimated and saved through the existing bot flow. Web text/photo estimates require confirmation before saving. Message retries and overlapping message/app-mention deliveries share a unique message key; database uniqueness prevents duplicate meals. No live Slack messages were sent during testing. Slack natural-language corrections and automatic posting schedules remain future work.
 
-## Verification and remaining deployment work
+## Verification and deployment
 
 Local tests cover Tokyo midnight, missing values, energy double counting, removed records, CSV escaping, Slack request signing and file host restrictions, plus unauthenticated and foreign-account access. Production build succeeds without credentials because the dashboard requests public configuration at runtime.
 
 An actual database transaction verified meal insertion, correction, idempotency and soft deletion, then rolled back. Anonymous/authenticated direct table grants were checked to be absent. Security advisors returned only informational findings for intentional RLS-with-no-policy tables.
 
-Vercel team access is authorized. The publishable Supabase key and owner profile configuration have been added to the deployment environments. A real temporary Auth identity verified sign-in, rejection before profile provisioning, and an authenticated initial read; test identities were removed.
+Vercel team access is authorized. The publishable Supabase key and owner profile configuration have been added to the deployment environments. Production API checks verified email-link authentication, rejection before profile provisioning, meal save/reload/correction/deletion, retry idempotency, and weight/energy/target persistence. Temporary profiles and Auth identities were removed after verification.
 
-Email login is still blocked by the existing Supabase URL configuration: redirects currently fall back to localhost:3000. Set Site URL to https://caltrack-mvp-haaanco.vercel.app and allow https://caltrack-mvp-haaanco.vercel.app/dashboard in Authentication > URL Configuration. This change requires access to the Supabase dashboard. Complete browser-to-database verification after correcting it. No live Slack messages were sent.
+Email URL configuration is complete: Site URL is https://caltrack-mvp-haaanco.vercel.app and the allowed redirect is https://caltrack-mvp-haaanco.vercel.app/dashboard. A generated email-login link was verified against the live Auth service: it redirects to the production dashboard and issues a valid session. No real-user login email or live Slack message was sent during testing.
+
+Automatic text/photo estimation is currently blocked by the existing OpenAI credential: a live provider check returned HTTP 401 with `invalid_api_key`. Replace `OPENAI_API_KEY` in the existing Vercel project and redeploy before retesting estimates. Manual calorie entry and saved records work. Slack bot credentials passed auth.test; actual Slack message delivery has not been tested.
