@@ -47,3 +47,13 @@ Email URL configuration is complete: Site URL is https://caltrack-mvp-haaanco.ve
 The OpenAI key was replaced and API credits activated. Live production text estimation, image-input estimation using a synthetic fixture, and saving/reloading the confirmed AI total passed. Real food-photo accuracy has not been evaluated. Slack bot credentials passed auth.test; actual Slack message delivery has not been tested.
 
 Password verification against the live Auth service covered email-only account recovery, setting a first password, signing in with it, rejecting a wrong password, and refresh-token renewal without entering credentials again. Temporary Auth identities were removed. Type checking, all 14 existing tests, and the production build passed. Local browser automation could not run in this environment, so device-specific Home Screen persistence remains to be checked on the user's device.
+
+## Oura Ring
+
+Apply `supabase/oura.sql` and configure server-only `OURA_CLIENT_ID`, `OURA_CLIENT_SECRET`, and `OURA_TOKEN_ENCRYPTION_KEY` (32 random bytes encoded as base64). Register the exact OAuth redirect `https://caltrack-mvp-haaanco.vercel.app/api/oura/callback`. `CALTRACK_ORIGIN` can override the production origin for another installation. Never rotate the encryption key without reconnecting Oura accounts.
+
+Open `/integrations/oura` while signed into CalTrack, then authorize Oura. The scope is `daily` only. Consent uses PKCE, state matching, a ten-minute authenticated encrypted browser cookie, and a profile binding derived from the verified app session. Tokens are encrypted with AES-256-GCM and stored in a server-only RLS table; the browser never receives Oura tokens. A database lease serializes refresh-token rotation.
+
+The dashboard imports the previous 30 completed Oura calendar days on app open if the last sync was at least 12 hours ago. There is no scheduled background job. Only daily `total_calories` is imported as estimated daily total expenditure; today's incomplete data, zero placeholders, steps, sleep, readiness and heart rate are excluded. Daily upserts are idempotent. Manual daily totals take precedence, and activity calories are never added again. Disconnect removes stored credentials but keeps previously imported totals; Oura's grant can also be revoked in Oura settings.
+
+Verification: unit tests cover token tampering, consent scope/PKCE, anonymous requests, invalid callback state, pagination, duplicate dates, completed-day filtering, and manual-total precedence. A live Oura consent and real-data sync require the owner's Oura login and client registration and must be verified before reporting the account connected.

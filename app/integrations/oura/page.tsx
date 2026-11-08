@@ -1,0 +1,23 @@
+'use client';
+import { useCallback, useEffect, useState } from 'react';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+type Status={configured:boolean;connected:boolean;lastSyncedAt:string|null;lastError:string|null};
+export default function Oura(){
+  const [client,setClient]=useState<SupabaseClient>(),[status,setStatus]=useState<Status>(),[ready,setReady]=useState(false),[signedIn,setSignedIn]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const api=useCallback(async(action:string,body?:unknown)=>{
+    if(!client)throw new Error('接続を確認しています');const {data:{session}}=await client.auth.getSession();if(!session)throw new Error('CalTrackにログインしてください');
+    const r=await fetch('/api/oura/'+action,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+session.access_token,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),cache:'no-store'});const value=await r.json();if(!r.ok)throw new Error(value.error||'処理できませんでした');return value;
+  },[client]);
+  useEffect(()=>{let active=true;(async()=>{try{const cfg=await fetch('/api/config').then(r=>r.json());if(!cfg.url||!cfg.key)throw new Error('接続設定を確認してください');const c=createClient(cfg.url,cfg.key,{auth:{persistSession:true,autoRefreshToken:true}});const {data:{session}}=await c.auth.getSession();if(active){setClient(c);setSignedIn(!!session);setReady(true);}}catch(e){if(active){setError(e instanceof Error?e.message:'接続できません');setReady(true);}}})();return()=>{active=false;};},[]);
+  useEffect(()=>{if(!signedIn||!client)return;let active=true;(async()=>{try{const result=await api('status');if(active)setStatus(result);if(result.connected&&new URLSearchParams(location.search).get('result')==='connected'){const synced=await api('sync',{});if(active){setNotice(`${synced.imported}日分の総消費を取り込みました`);setStatus(await api('status'));}history.replaceState(null,'',location.pathname);}else{const result=new URLSearchParams(location.search).get('result');if(active&&result==='failed')setError('接続を完了できませんでした。もう一度接続してください。');if(active&&result==='denied')setError('Ouraのデータ共有が許可されませんでした。');}}catch(e){if(active)setError(e instanceof Error?e.message:'接続できません');}})();return()=>{active=false;};},[api,client,signedIn]);
+  async function run(action:()=>Promise<void>){setBusy(true);setError('');setNotice('');try{await action();}catch(e){setError(e instanceof Error?e.message:'処理できませんでした');}finally{setBusy(false);}}
+  return <main className="shell"><header className="header"><a className="brand" href="/dashboard">CalTrack</a><a href="/dashboard">記録に戻る</a></header><section className="card settings" style={{marginTop:30}}><p className="eyebrow">CONNECTED DATA</p><h1>Oura Ringと連携</h1><p className="muted">Ouraの日ごとの総消費カロリーを取り込み、食事との収支を確認できます。</p>{error&&<p role="alert" className="message error">{error}</p>}{notice&&<p role="status" className="message success">{notice}</p>}
+    {!ready?<p>接続を確認しています…</p>:!signedIn?<p><a className="text-link" href="/dashboard">CalTrackにログインしてください →</a></p>:!status?<p>連携状態を確認しています…</p>:<>
+      <p><strong>{status.connected?'接続済み':status.configured?'未接続':'接続準備中'}</strong></p>
+      {!status.configured?<><p>Ouraのアプリ登録を準備しています。設定が完了すると、ここからOuraにログインして連携できます。</p><p className="small muted">この画面でOuraのパスワードやAPIキーを入力する必要はありません。</p></>:<>
+      <button className="primary full" disabled={busy} onClick={()=>void run(async()=>{const result=await api('connect',{});location.assign(result.url);})}>{busy?'処理中…':status.connected?'Ouraに再接続':'Ouraに接続'}</button>
+      {status.connected&&<><p className="small muted">最終同期：{status.lastSyncedAt?new Date(status.lastSyncedAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'}):'まだ同期していません'}</p>{status.lastError&&<p role="alert">{status.lastError}</p>}<button className="secondary full" disabled={busy} onClick={()=>void run(async()=>{const result=await api('sync',{force:true});setNotice(`${result.imported}日分の総消費を取り込みました`);setStatus(await api('status'));})}>今すぐ同期</button><details style={{marginTop:20}}><summary>連携を解除</summary><p className="small muted">今後の取得を停止します。取り込み済みの総消費は残ります。Oura側の共有許可はOuraの設定からも取り消せます。</p><button className="quiet danger" disabled={busy} onClick={()=>void run(async()=>{await api('disconnect',{});setStatus(await api('status'));setNotice('Ouraとの連携を解除しました');})}>CalTrackとの連携を解除する</button></details></>}
+      </>}
+      <hr/><h2>取り込むデータ</h2><p>昨日までの直近30日分の総消費カロリーを取得します。CalTrackを開くと、前回の同期から12時間以上経過している場合に更新します。</p><p className="small muted">Ouraの日付をそのまま使います。今日の途中経過は取り込みません。同じ日の記録を二重に加算せず、手入力の総消費がある日は手入力を優先します。歩数・睡眠・心拍数は今回の同期には含めません。</p>
+    </>}</section></main>;
+}
