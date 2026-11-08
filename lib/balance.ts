@@ -1,5 +1,5 @@
 export type Meal = { id: string; eaten_at: string; original_text: string | null; total_kcal: number; protein_g: number | null; fat_g: number | null; carbs_g: number | null; meal_type: string | null; source: string | null; status: string; meal_items?: { food_name: string; kcal: number; assumption?: string }[] };
-export type Weight = { id: string; measured_at: string; weight_kg: number; body_fat_pct: number | null };
+export type Weight = { id: string; measured_at: string; weight_kg: number; body_fat_pct: number | null; source?: string };
 export type Energy = { source?: string; date: string; value_kcal: number; value_type: string; is_estimated: boolean; created_at?: string };
 
 export function tokyoDate(now = new Date()): string {

@@ -57,3 +57,16 @@ Open `/integrations/oura` while signed into CalTrack, then authorize Oura. The s
 The dashboard imports the previous 30 completed Oura calendar days on app open if the last sync was at least 12 hours ago. There is no scheduled background job. Only daily `total_calories` is imported as estimated daily total expenditure; today's incomplete data, zero placeholders, steps, sleep, readiness and heart rate are excluded. Daily upserts are idempotent. Manual daily totals take precedence, and activity calories are never added again. Disconnect removes stored credentials but keeps previously imported totals; Oura's grant can also be revoked in Oura settings.
 
 Verification: unit tests cover token tampering, consent scope/PKCE, anonymous requests, invalid callback state, pagination, duplicate dates, completed-day filtering, and manual-total precedence. A live Oura consent and real-data sync require the owner's Oura login and client registration and must be verified before reporting the account connected.
+
+
+## Withings weight and body-fat sync
+
+- Apply `supabase/withings.sql` to the existing project. Connection tokens remain encrypted and are inaccessible to public/client database roles.
+- Register CalTrack in the official Withings developer dashboard. Exact redirect URI: `https://caltrack-mvp-haaanco.vercel.app/api/withings/callback`. Request only `user.metrics`.
+- Set production-only server variables `WITHINGS_CLIENT_ID`, `WITHINGS_CLIENT_SECRET`, and `WITHINGS_TOKEN_ENCRYPTION_KEY` (independent random 32-byte base64 secret), then redeploy. Do not prefix these with NEXT_PUBLIC or commit real values.
+- Open `/integrations/withings` while logged in, connect and grant consent. The page states clearly that the provider's metrics scope is broader than the two measurements we fetch.
+- First sync requests the provider's available history using `lastupdate=0`; subsequent syncs use a saved modified-time cursor with a one-second overlap. Preserve timestamps, convert `value * 10^unit`, save weight (type 1) and optional fat ratio (type 6) from the same group. Objectives, future/invalid/weightless groups are excluded.
+- Measurement identity includes the app user, provider user and group ID. Retry-safe upserts do not modify manual entries. A server lease serializes refresh-token rotation; refreshed tokens are encrypted and persisted before data fetching. Pagination is bounded; an incomplete fetch never advances the sync cursor.
+- App-open sync is cached for 12 hours. Manual sync bypasses that cache. This does not create a background scheduler: open CalTrack or press sync after a scale upload.
+- The existing record API shows 30 days ending at the selected date. Change that date to inspect older imported history. Latest-per-day display uses measurement time. Disconnect deletes the connection, retaining imported history.
+- Validation: `npm run typecheck`, `npm test`, `npm run build`; real-provider OAuth/data sync requires registration and the owner's consent.
