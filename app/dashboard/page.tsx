@@ -13,7 +13,8 @@ function dateTime(date:string) { const now=new Date(); return `${date}T${new Int
 
 export default function Dashboard() {
   const [client,setClient]=useState<SupabaseClient|null>(null), [session,setSession]=useState<Session|null>(null), [ready,setReady]=useState(false);
-  const [email,setEmail]=useState(''),[loginSent,setLoginSent]=useState(false),[password,setPassword]=useState('');
+  const [email,setEmail]=useState(''),[password,setPassword]=useState('');
+  const [loginMode,setLoginMode]=useState<'password'|'reset'>('password'),[recovery,setRecovery]=useState(false);
   const [date,setDate]=useState(tokyoDate()),[tab,setTab]=useState<'today'|'history'|'settings'>('today');
   const [data,setData]=useState<Records|null>(null),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [text,setText]=useState(''),[kcal,setKcal]=useState(''),[mealType,setMealType]=useState('dinner'),[time,setTime]=useState(dateTime(tokyoDate()));
@@ -29,10 +30,12 @@ export default function Dashboard() {
     (async()=>{try{
       const config=await fetch('/api/config').then(r=>r.json());
       if(!config.url||!config.key)throw new Error('ログイン機能の接続設定が未完了です。設定完了後にこのページを再読み込みしてください。');
-      const c=createClient(config.url,config.key); if(!active)return; setClient(c);
+      const recoveryRequested=new URLSearchParams(window.location.hash.slice(1)).get('type')==='recovery'||new URLSearchParams(window.location.search).get('password')==='recovery';
+      if(recoveryRequested)setRecovery(true);
+      const c=createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}}); if(!active)return; setClient(c);
+      const {data:{subscription}}=c.auth.onAuthStateChange((event,s)=>{if(active){setSession(s);if(event==='PASSWORD_RECOVERY')setRecovery(true);if(!s){setData(null);setRecovery(false);}}}); unsubscribe=()=>subscription.unsubscribe();
       const {data:{session:s},error:e}=await c.auth.getSession(); if(e)throw e; if(active){setSession(s);setReady(true);}
-      const {data:{subscription}}=c.auth.onAuthStateChange((_event,s)=>{if(active){setSession(s); if(!s)setData(null);}}); unsubscribe=()=>subscription.unsubscribe();
-      if(window.location.hash.includes('access_token'))history.replaceState(null,'',window.location.pathname);
+      if(window.location.hash.includes('access_token'))history.replaceState(null,'',window.location.pathname+(recoveryRequested?'?password=recovery':''));
     }catch(e){if(active){setError(e instanceof Error?e.message:'接続できませんでした');setReady(true);}}})();
     return()=>{active=false;unsubscribe?.();};
   },[]);
@@ -50,6 +53,12 @@ export default function Dashboard() {
   useEffect(()=>{setTime(dateTime(date));},[date]);
   function mutationId(kind:string,payload:unknown){const serialized=JSON.stringify(payload);const prior=mutationKeys.current[kind];if(prior?.payload===serialized)return prior.id;const id=crypto.randomUUID();mutationKeys.current[kind]={payload:serialized,id};return id;}
   async function run(action:()=>Promise<void>){setBusy(true);setError('');setNotice('');try{await action();}catch(e){setError(e instanceof Error?e.message:'処理に失敗しました');}finally{setBusy(false);}}
+  async function savePassword(value:string){
+    if(!client)throw new Error('接続設定が未完了です');
+    const {error}=await client.auth.updateUser({password:value});
+    if(error)throw new Error(error.code==='weak_password'?'より安全なパスワードを設定してください。':'パスワードを保存できませんでした。設定用メールからやり直してください。');
+    setRecovery(false);history.replaceState(null,'',window.location.pathname);setPassword('');setNotice('パスワードを保存しました。次回からメールアドレスとパスワードでログインできます。');
+  }
   function resetMeal(){setText('');setKcal('');setImage(undefined);setAnalysis(null);setEdit(undefined);setFraction(1);requestId.current=null;setTime(dateTime(date));if(photoRef.current)photoRef.current.value='';}
   function mealChanged(){requestId.current=null;setAnalysis(null);setFraction(1);}
   async function selectPhoto(file?:File){if(!file)return; await run(async()=>{
@@ -74,7 +83,28 @@ export default function Dashboard() {
   return <main className="shell">
     <header className="header"><a href="/dashboard" className="brand"><span className="brand-icon">C</span>CalTrack<span className="brand-label">日々の、ちょうどいいを。</span></a>{session&&<button className="quiet" onClick={()=>void run(async()=>{await client?.auth.signOut();setNotice('ログアウトしました');})} disabled={busy}>ログアウト</button>}</header>
     <div aria-live="polite">{error&&<div role="alert" className="message error">{error}</div>}{notice&&<div role="status" className="message success">{notice}</div>}</div>
-    {!ready?<section className="card">接続を確認しています…</section>:!session?<section className="card login"><p className="eyebrow">YOUR DAILY BALANCE</p><h1>食べたものを記録。<br/>一日のバランスを知る。</h1><p className="muted">食事・体重・消費カロリーをまとめて振り返る、あなた専用のノート。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{if(!client)throw new Error('接続設定が未完了です');const {error}=password?await client.auth.signInWithPassword({email,password}):await client.auth.signInWithOtp({email,options:{emailRedirectTo:window.location.origin+'/dashboard'}});if(error)throw new Error('ログインできませんでした。メールアドレス・パスワードや接続設定を確認してください');if(!password){setLoginSent(true);setNotice('ログイン用メールを送りました。メール内のリンクをこの端末で開いてください。');}});}}><label>メールアドレス<input type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="登録したメールアドレス"/></label><details><summary>パスワードでログイン</summary><label>パスワード<input type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)}/></label></details><button className="primary full" disabled={!client||busy}>{busy?'接続中…':password?'ログイン':loginSent?'ログインメールを再送':'メールでログイン'}</button></form><p className="small muted">登録済みのアカウントだけが記録を閲覧できます。</p></section>:<>
+    {!ready?<section className="card">接続を確認しています…</section>:!session?<section className="card login">
+      <p className="eyebrow">YOUR DAILY BALANCE</p><h1>{loginMode==='password'?'CalTrackにログイン':'パスワードの設定・再設定'}</h1>
+      <p className="muted">{loginMode==='password'?'食事・体重・消費カロリーをまとめて記録。':'初めて設定する方も、パスワードを忘れた方も、登録済みのメールアドレスで設定できます。'}</p>
+      <form onSubmit={e=>{e.preventDefault();void run(async()=>{
+        if(!client)throw new Error('接続設定が未完了です');
+        if(loginMode==='reset'){
+          const {error}=await client.auth.resetPasswordForEmail(email.trim(),{redirectTo:window.location.origin+'/dashboard'});
+          if(error)throw new Error('メールを送信できませんでした。少し時間をおいて再度お試しください。');
+          setNotice('登録済みのアドレスにパスワード設定用メールを送りました。メール内のリンクを開いて設定してください。');
+        }else{
+          const {error}=await client.auth.signInWithPassword({email:email.trim(),password});
+          if(error)throw new Error('ログインできませんでした。メールアドレスとパスワードを確認してください。未設定の場合は「初回設定・パスワードを忘れた方」から設定してください。');
+          setPassword('');
+        }
+      });}}><fieldset disabled={!client||busy}>
+        <label>メールアドレス<input name="email" type="email" autoComplete="username" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="登録済みのメールアドレス"/></label>
+        {loginMode==='password'&&<label>パスワード<input name="password" type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)}/></label>}
+        <button className="primary full" type="submit">{busy?'処理中…':loginMode==='password'?'ログイン':'設定用メールを送信'}</button>
+      </fieldset></form>
+      <button className="quiet full" type="button" disabled={busy} onClick={()=>{setLoginMode(loginMode==='password'?'reset':'password');setPassword('');setError('');setNotice('');}}>{loginMode==='password'?'初回設定・パスワードを忘れた方':'ログインに戻る'}</button>
+      <p className="small muted">ログイン状態はこの端末に保持されます。登録済みのアカウントだけが記録を閲覧できます。</p>
+    </section>:recovery?<section className="card login"><h1>パスワードを設定</h1><p className="muted">{session.user.email} の新しいパスワードを入力してください。</p><PasswordEditor onSave={savePassword}/></section>:<>
     <nav className="tabs" aria-label="メインメニュー">{(['today','history','settings'] as const).map(t=><button key={t} aria-current={tab===t?'page':undefined} className={tab===t?'selected':''} onClick={()=>setTab(t)} disabled={busy}>{({today:'今日の記録',history:'振り返り',settings:'目標・設定'})[t]}</button>)}</nav>
     <div className="day-header"><div><p className="eyebrow">{tab==='history'?'YOUR PROGRESS':'DAILY JOURNAL'}</p><h1>{tab==='settings'?'自分のペースをつくる':tab==='history'?'小さな記録を、変化に。':'今日のバランス'}</h1></div><label className="date-picker"><span className="sr-only">表示日（日本時間）</span><input type="date" value={date} max={tokyoDate()} disabled={busy} onChange={e=>{if(e.target.value){setDate(e.target.value);resetMeal();}}}/></label></div>
     {loading?<section className="card">記録を読み込んでいます…</section>:!data||!daily?<section className="card"><p>記録を読み込めませんでした。</p><button disabled={busy} onClick={()=>void reload()}>再読み込み</button></section>:<>
@@ -99,7 +129,7 @@ export default function Dashboard() {
       </aside></div>
     </>}
     {tab==='history'&&<><div className="history-grid"><section className="card"><p className="eyebrow">LAST 30 DAYS</p><h2>体重の推移</h2>{data.weights.length<2?<div className="empty">2回以上記録すると、変化をグラフで表示します。</div>:<WeightChart weights={data.weights}/>}</section><section className="card"><p className="eyebrow">LAST 7 DAYS</p><h2>摂取カロリーの推移</h2><div className="bars">{Array.from({length:7},(_,i)=>shiftDay(date,i-6)).map(day=>{const s=summary(data.meals,data.energy,day,null);const max=Math.max(2500,...data.meals.map(m=>Number(m.total_kcal)));return <div className="bar-day" key={day}><span>{s.mealCount?n(s.intake):'—'}</span><div className="bar-track"><div style={{height:`${s.mealCount?Math.max(2,Math.min(100,s.intake/max*100)):0}%`}}/></div><small>{day.slice(5)}</small></div>;})}</div><p className="small muted">— は食事未記録。単位：kcal</p></section></div><section className="card"><div className="section-title"><h2>日別の記録</h2><button className="secondary" onClick={exportCsv}>食事CSVを書き出す</button></div><div className="table-scroll"><table><thead><tr><th>日付</th><th>摂取</th><th>総消費</th><th>収支</th><th>体重</th></tr></thead><tbody>{Array.from({length:30},(_,i)=>shiftDay(date,-i)).map(day=>{const s=summary(data.meals,data.energy,day,null);const w=data.weights.filter(w=>tokyoDate(new Date(w.measured_at))===day).at(-1);return <tr key={day}><th>{day.slice(5)}</th><td>{s.mealCount?n(s.intake):'—'}</td><td>{s.expenditure===null?'—':n(s.expenditure)}</td><td>{s.balance===null||!s.mealCount?'—':signed(s.balance)}</td><td>{w?`${n(Number(w.weight_kg))} kg`:'—'}</td></tr>;})}</tbody></table></div><p className="small muted">選択日までの30日分を表示。カロリーは記録済みの食事を集計しています。</p></section></>}
-    {tab==='settings'&&<section className="card settings"><p className="eyebrow">YOUR OWN PACE</p><h2>一日の摂取目標</h2><p className="muted">設定した目標と記録済みの摂取量との差を表示します。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'settings',target_intake_kcal:target?Number(target):null})});setNotice('目標を保存しました');await reload();});}}><fieldset disabled={busy}><label>目標（kcal／日）<input type="number" inputMode="numeric" min="1000" max="10000" value={target} onChange={e=>setTarget(e.target.value)} placeholder="未設定"/></label><button className="primary" type="submit">目標を保存</button></fieldset></form><p className="small muted">空欄で保存すると目標を解除します。ここでは自動で減量目標を決めません。</p><hr/><h2>服薬の設定</h2><p className="small muted">服用を記録する薬と、通常の1回量を登録します。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'medication_definition',request_id:mutationId('medication_definition',{medName,medDose,medUnit}),name:medName,default_dose:Number(medDose),unit:medUnit})});delete mutationKeys.current.medication_definition;setMedName('');setMedDose('');setNotice('服薬の設定を保存しました');await reload();});}}><fieldset disabled={busy}><label>薬の名前<input required maxLength={120} value={medName} onChange={e=>setMedName(e.target.value)}/></label><div className="form-grid"><label>1回量<input type="number" required min="0" max="100000" step="any" inputMode="decimal" value={medDose} onChange={e=>setMedDose(e.target.value)}/></label><label>単位<input required maxLength={20} value={medUnit} onChange={e=>setMedUnit(e.target.value)}/></label></div><button className="secondary" type="submit">服薬の設定を追加</button></fieldset></form><hr/><h2>データの扱い</h2><p className="muted">日時はすべて日本時間で集計。記録はアカウントに紐づけて保存します。食事写真は推定のためにOpenAIへ送信し、アプリ内には保存しません。</p><a className="text-link" href="/setup">接続状態を見る →</a></section>}
+    {tab==='settings'&&<section className="card settings"><p className="eyebrow">YOUR OWN PACE</p><h2>一日の摂取目標</h2><p className="muted">設定した目標と記録済みの摂取量との差を表示します。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'settings',target_intake_kcal:target?Number(target):null})});setNotice('目標を保存しました');await reload();});}}><fieldset disabled={busy}><label>目標（kcal／日）<input type="number" inputMode="numeric" min="1000" max="10000" value={target} onChange={e=>setTarget(e.target.value)} placeholder="未設定"/></label><button className="primary" type="submit">目標を保存</button></fieldset></form><p className="small muted">空欄で保存すると目標を解除します。ここでは自動で減量目標を決めません。</p><hr/><h2>服薬の設定</h2><p className="small muted">服用を記録する薬と、通常の1回量を登録します。</p><form onSubmit={e=>{e.preventDefault();void run(async()=>{await api('/api/records',{method:'POST',body:JSON.stringify({kind:'medication_definition',request_id:mutationId('medication_definition',{medName,medDose,medUnit}),name:medName,default_dose:Number(medDose),unit:medUnit})});delete mutationKeys.current.medication_definition;setMedName('');setMedDose('');setNotice('服薬の設定を保存しました');await reload();});}}><fieldset disabled={busy}><label>薬の名前<input required maxLength={120} value={medName} onChange={e=>setMedName(e.target.value)}/></label><div className="form-grid"><label>1回量<input type="number" required min="0" max="100000" step="any" inputMode="decimal" value={medDose} onChange={e=>setMedDose(e.target.value)}/></label><label>単位<input required maxLength={20} value={medUnit} onChange={e=>setMedUnit(e.target.value)}/></label></div><button className="secondary" type="submit">服薬の設定を追加</button></fieldset></form><hr/><h2>パスワードの設定・変更</h2><p className="small muted">ホーム画面からもメールアドレスとパスワードでログインできます。</p><PasswordEditor onSave={savePassword}/><hr/><h2>データの扱い</h2><p className="muted">日時はすべて日本時間で集計。記録はアカウントに紐づけて保存します。食事写真は推定のためにOpenAIへ送信し、アプリ内には保存しません。</p><a className="text-link" href="/setup">接続状態を見る →</a></section>}
     </>}
     </>}
     <footer>CalTrack <span>続けられる記録から、毎日を整える。</span></footer>
@@ -110,4 +140,23 @@ function WeightChart({weights}:{weights:Weight[]}){
   const start=Date.parse(weights[0].measured_at),duration=Math.max(1,Date.parse(weights.at(-1)!.measured_at)-start);
   const points=weights.map(w=>`${40+(Date.parse(w.measured_at)-start)/duration*400},${170-(Number(w.weight_kg)-min)/(max-min)*130}`).join(' ');
   return <><svg viewBox="0 0 480 210" className="weight-chart" role="img" aria-label={`体重推移。${tokyoDate(new Date(weights[0].measured_at))}の${values[0]}kgから、${tokyoDate(new Date(weights.at(-1)!.measured_at))}の${values.at(-1)}kg`}>{[0,.5,1].map(v=><g key={v}><line x1="40" x2="440" y1={170-v*130} y2={170-v*130} stroke="#e6ece8"/><text x="5" y={174-v*130} fontSize="11" fill="#67766d">{(min+v*(max-min)).toFixed(1)}</text></g>)}<polyline points={points} fill="none" stroke="#37775e" strokeWidth="3" strokeLinejoin="round"/>{weights.map(w=><circle key={w.id} cx={40+(Date.parse(w.measured_at)-start)/duration*400} cy={170-(Number(w.weight_kg)-min)/(max-min)*130} r="3" fill="#37775e"/>)}<text x="40" y="198" fontSize="11" fill="#67766d">{tokyoDate(new Date(weights[0].measured_at)).slice(5)}</text><text x="408" y="198" fontSize="11" fill="#67766d">{tokyoDate(new Date(weights.at(-1)!.measured_at)).slice(5)}</text></svg><p className="small muted">記録した体重を表示（kg）。記録間を線で結んでいます。</p></>;
+}
+
+function PasswordEditor({onSave}:{onSave:(password:string)=>Promise<void>}){
+  const [value,setValue]=useState(''),[confirmation,setConfirmation]=useState(''),[saving,setSaving]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false);
+  async function submit(event:FormEvent){
+    event.preventDefault();setError('');setSaved(false);
+    if(value.length<8){setError('パスワードは8文字以上で入力してください。');return;}
+    if(value!==confirmation){setError('確認用パスワードが一致しません。');return;}
+    setSaving(true);
+    try{await onSave(value);setValue('');setConfirmation('');setSaved(true);}
+    catch(e){setError(e instanceof Error?e.message:'パスワードを保存できませんでした。');}
+    finally{setSaving(false);}
+  }
+  return <form onSubmit={submit}><fieldset disabled={saving}>
+    <label>新しいパスワード<input name="new-password" type="password" autoComplete="new-password" minLength={8} required value={value} onChange={e=>setValue(e.target.value)} placeholder="8文字以上"/></label>
+    <label>新しいパスワード（確認）<input name="confirm-password" type="password" autoComplete="new-password" minLength={8} required value={confirmation} onChange={e=>setConfirmation(e.target.value)}/></label>
+    {error&&<p role="alert" className="message error">{error}</p>}{saved&&<p role="status">パスワードを保存しました。</p>}
+    <button className="primary full" type="submit">{saving?'保存中…':'パスワードを保存'}</button>
+  </fieldset></form>;
 }
