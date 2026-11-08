@@ -16,13 +16,13 @@ Fresh databases: run `supabase/schema.sql`, then `supabase/upgrade-web.sql`. Exi
 
 The database remains server-only: RLS is enabled and `anon`/`authenticated` have no access to the record tables. The server verifies the Supabase token with `getUser()` on each request, then derives the profile from `auth_user_id`. The first login can claim only a pre-provisioned profile with a matching, verified email; request bodies never determine ownership. Provision the owner's profile through a trusted admin channel. Account provisioning data must not be committed to this public repository.
 
-Enable email authentication in Supabase, set Site URL to the production app, and allow `<app-origin>/dashboard` as a redirect URL. First-time users can use the login email; existing users can also use a password. Creating an Auth identity alone grants no record access.
+Enable email authentication in Supabase, set Site URL to the production app, and allow `<app-origin>/dashboard` as a redirect URL. Password login is the default. Existing email-only users choose "初回設定・パスワードを忘れた方", verify their email via the recovery link, and set a password. Signed-in users can also set or change it in Settings. The dashboard handles PASSWORD_RECOVERY before showing records, clears URL tokens, and persists/refreshes sessions on the same browser or installed app. Creating an Auth identity alone grants no record access.
 
 ## Behavior
 
 - Today: meal entry, AI draft estimation, portion adjustment, confirmation, edit and soft delete; weight/body fat, total energy and medication logs.
 - History: 30 days of records, weight chart, seven-day intake and meal CSV (with formula injection protection).
-- Settings: daily intake target and medication definitions.
+- Settings: daily intake target, medication definitions, and password setup/change.
 - Total energy is the complete daily total (resting + active), never added to active calories again. Missing expenditure or targets remain unknown.
 - Medicines are recorded only; they do not alter calculated calories.
 - Photos are resized locally, sent to OpenAI for estimation with `store:false`, and not retained by this app. Only confirmed totals and nutrition estimates are saved.
@@ -44,4 +44,6 @@ Vercel team access is authorized. The publishable Supabase key and owner profile
 
 Email URL configuration is complete: Site URL is https://caltrack-mvp-haaanco.vercel.app and the allowed redirect is https://caltrack-mvp-haaanco.vercel.app/dashboard. A generated email-login link was verified against the live Auth service: it redirects to the production dashboard and issues a valid session. No real-user login email or live Slack message was sent during testing.
 
-Automatic text/photo estimation is currently blocked by the existing OpenAI credential: a live provider check returned HTTP 401 with `invalid_api_key`. Replace `OPENAI_API_KEY` in the existing Vercel project and redeploy before retesting estimates. Manual calorie entry and saved records work. Slack bot credentials passed auth.test; actual Slack message delivery has not been tested.
+The OpenAI key was replaced and API credits activated. Live production text estimation, image-input estimation using a synthetic fixture, and saving/reloading the confirmed AI total passed. Real food-photo accuracy has not been evaluated. Slack bot credentials passed auth.test; actual Slack message delivery has not been tested.
+
+Password verification against the live Auth service covered email-only account recovery, setting a first password, signing in with it, rejecting a wrong password, and refresh-token renewal without entering credentials again. Temporary Auth identities were removed. Type checking, all 14 existing tests, and the production build passed. Local browser automation could not run in this environment, so device-specific Home Screen persistence remains to be checked on the user's device.
