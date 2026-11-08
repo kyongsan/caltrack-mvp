@@ -70,3 +70,15 @@ Verification: unit tests cover token tampering, consent scope/PKCE, anonymous re
 - App-open sync is cached for 12 hours. Manual sync bypasses that cache. This does not create a background scheduler: open CalTrack or press sync after a scale upload.
 - The existing record API shows 30 days ending at the selected date. Change that date to inspect older imported history. Latest-per-day display uses measurement time. Disconnect deletes the connection, retaining imported history.
 - Validation: `npm run typecheck`, `npm test`, `npm run build`; real-provider OAuth/data sync requires registration and the owner's consent.
+
+
+## Google Health weight sync
+
+- Google Health API v4 (not the retired Google Fit / Fitbit endpoints). Apply `supabase/google-health.sql`.
+- Enable Google Health API in an isolated Google Cloud project. Configure a Web OAuth client, the owner as a test user, and only `https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly`.
+- Exact redirect: `https://caltrack-mvp-haaanco.vercel.app/api/google-health/callback`. Set server-only `GOOGLE_HEALTH_CLIENT_ID`, `GOOGLE_HEALTH_CLIENT_SECRET`, `GOOGLE_HEALTH_TOKEN_ENCRYPTION_KEY` (independent random 32-byte base64 key), then redeploy.
+- Google policy/terms acceptance and user consent are separate setup steps. Restricted scopes may require verification/security assessment for public use. External Testing health-scope refresh tokens normally expire in seven days; the connection screen discloses reauthorization.
+- `/integrations/google-health`: connects with state-bound encrypted HttpOnly cookie, PKCE S256, offline access. Callback requires a refresh token; refresh responses may omit a replacement and preserve the existing refresh token.
+- Fetch only weight and body-fat from the fixed health.googleapis.com endpoints with all-sources and bounded pagination. Preserve full provider resource names in deterministic per-app-user IDs. Convert grams to kg. Attach fat only with the same physical timestamp and data source; never attach unrelated same-day values. Manual entries remain separate.
+- Full available history is re-read on sync to incorporate corrections; 12-hour cache for app-open sync, manual bypass. No unbounded polling or scheduler. Existing history screen shows a 30-day window ending on the selected date.
+- Google Health must already contain the Withings measurements. Until Google Cloud setup and explicit consent finish, no real Google health data has been imported.
