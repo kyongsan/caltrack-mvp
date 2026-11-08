@@ -24,7 +24,7 @@ test('Oura API and callback reject missing app authorization and invalid state',
  const callback=await GET(new Request('https://example.invalid/api/oura/callback?state=forged&code=invalid'),{params:Promise.resolve({action:'callback'})});assert.equal(callback.status,303);assert(callback.headers.get('location')?.endsWith('result=failed'));assert(callback.headers.get('set-cookie')?.includes('Max-Age=0'));
 });
 test('daily sync uses total calories, deduplicates pages, excludes today and zero placeholders',async(t)=>{
- let calls=0;t.mock.method(globalThis,'fetch',async(input,init)=>{
+ let calls=0;t.mock.method(globalThis,'fetch',async(input:RequestInfo | URL,init?:RequestInit)=>{
   const url=new URL(String(input));assert.equal(url.origin,'https://api.ouraring.com');assert.equal(url.pathname,'/v2/usercollection/daily_activity');assert.equal(url.searchParams.get('end_date'),'2026-11-07');assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer fixture-token');calls++;
   return Response.json(calls===1?{data:[{day:'2026-11-07',total_calories:2400},{day:'2026-11-08',total_calories:123},{day:'2026-11-06',total_calories:0}],next_token:'page2'}:{data:[{day:'2026-11-07',total_calories:2500}],next_token:null});
  });
