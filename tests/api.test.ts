@@ -51,7 +51,8 @@ test('photo analysis accepts a full batch and legacy single photos, but rejects 
     return Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({meal_type:'dinner',items:[{name:'食事',amount:null,unit:null,kcal:400,protein_g:null,fat_g:null,carbs_g:null,assumption:'推定'}],total_kcal:400,protein_g:null,fat_g:null,carbs_g:null})}]}]});
   });
   const photo='data:image/jpeg;base64,AAAA';
-  assert.equal((await analyze(req('POST',{text:'',images:Array(MAX_MEAL_IMAGES).fill(photo)},'owner-token'))).status,200);
+  const batchResponse=await analyze(req('POST',{text:'',images:Array(MAX_MEAL_IMAGES).fill(photo)},'owner-token'));
+  assert.equal(batchResponse.status,200);assert.match(batchResponse.headers.get('Server-Timing')||'',/auth;dur=\d+, input;dur=\d+, ai;dur=\d+, total;dur=\d+/);
   assert.equal(aiPayloads[0].input[0].content.filter((part:{type:string})=>part.type==='input_image').length,MAX_MEAL_IMAGES);
   assert.equal((await analyze(req('POST',{text:'',image:photo},'owner-token'))).status,200);
   assert.equal((await analyze(req('POST',{text:'ご飯',images:[]},'owner-token'))).status,200);

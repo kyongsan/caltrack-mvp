@@ -8,6 +8,16 @@ test('AI uses structured output, does not retain photos, and reconciles item tot
   const result=await analyzeMeal('data:image/jpeg;base64,AAAA','ご飯は半分');
   assert.equal(result.total_kcal,317);assert.equal(payload.store,false);assert.equal(payload.text.format.type,'json_schema');assert.equal(payload.text.format.strict,true);
   assert.equal(payload.input[0].content[1].image_url,'data:image/jpeg;base64,AAAA');assert.ok(payload.input[0].content[0].text.includes('ご飯は半分'));
+  assert.deepEqual(Object.keys(payload.text.format.schema.properties.items.items.properties),['name','kcal','assumption']);
+  assert.equal(payload.text.format.schema.properties.total_kcal,undefined);
+  assert.equal(result.protein_g,10);assert.equal(result.fat_g,5);assert.equal(result.carbs_g,50);
+});
+test('compact AI response preserves nutrition totals and produces the existing app response shape',async(t)=>{
+  process.env.OPENAI_API_KEY='test-only-key';
+  t.mock.method(globalThis,'fetch',async()=>Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({meal_type:'dinner',items:[{name:'鶏胸肉',kcal:220,assumption:'150gとして推定'}],protein_g:40,fat_g:6,carbs_g:0})}]}]}));
+  const result=await analyzeMeal(undefined,'鶏胸肉150g');
+  assert.equal(result.total_kcal,220);assert.equal(result.protein_g,40);
+  assert.equal(result.items[0].amount,null);assert.equal(result.items[0].protein_g,null);
 });
 test('AI rejects incomplete and empty results instead of saving invented zero calories',async(t)=>{
   process.env.OPENAI_API_KEY='test-only-key';

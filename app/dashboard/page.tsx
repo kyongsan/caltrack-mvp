@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { tokyoDate, shiftDay, summary, csvCell, type Meal, type Weight, type Energy } from '@/lib/balance';
 import type { MealAnalysis } from '@/lib/meal-ai';
-import { MAX_MEAL_IMAGES, prepareMealPhoto } from '@/lib/meal-images';
+import { MAX_MEAL_IMAGES, prepareMealPhotos } from '@/lib/meal-images';
 
 type Medication = { id:string; name:string; default_dose:number; unit:string };
 type Records = { meals:Meal[]; weights:Weight[]; energy:Energy[]; medications:Medication[]; medication_logs:{medication_id:string}[]; profile:{target_intake_kcal:number|null} };
@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [data,setData]=useState<Records|null>(null),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [text,setText]=useState(''),[kcal,setKcal]=useState(''),[mealType,setMealType]=useState('dinner'),[time,setTime]=useState(dateTime(tokyoDate()));
   const [images,setImages]=useState<string[]>([]),[analysis,setAnalysis]=useState<MealAnalysis|null>(null),[fraction,setFraction]=useState(1),[edit,setEdit]=useState<string>();
+  const [photoProgress,setPhotoProgress]=useState<{completed:number;total:number}|null>(null),[analyzing,setAnalyzing]=useState(false);
   const [weight,setWeight]=useState(''),[bodyFat,setBodyFat]=useState(''),[energy,setEnergy]=useState(''),[estimated,setEstimated]=useState(false),[target,setTarget]=useState('');
   const [deleteId,setDeleteId]=useState<string>();
   const [medName,setMedName]=useState(''),[medDose,setMedDose]=useState(''),[medUnit,setMedUnit]=useState('mg');
@@ -67,9 +68,14 @@ export default function Dashboard() {
   function mealChanged(){requestId.current=null;if(analysis)setKcal('');setAnalysis(null);setFraction(1);}
   async function selectPhotos(files:File[]){if(!files.length)return; await run(async()=>{
     if(images.length+files.length>MAX_MEAL_IMAGES)throw new Error(`写真は一度に${MAX_MEAL_IMAGES}枚まで追加できます。現在${images.length}枚を選択中です`);
-    const added:string[]=[];
-    for(const file of files)added.push(await prepareMealPhoto(file));
-    setImages(current=>Array.from(new Set([...current,...added])));mealChanged();
+    setPhotoProgress({completed:0,total:files.length});
+    try{const added=await prepareMealPhotos(files,(completed,total)=>setPhotoProgress({completed,total}));setImages(current=>Array.from(new Set([...current,...added])));mealChanged();}
+    finally{setPhotoProgress(null);}
+  });}
+  async function estimateMeal(){await run(async()=>{
+    setAnalyzing(true);
+    try{const result=await api('/api/meals/analyze',{method:'POST',body:JSON.stringify({text,images})});setAnalysis(result.analysis);if(!text.trim())setText(result.analysis.items.map((item:{name:string})=>item.name).join('、'));setKcal(String(result.analysis.total_kcal));setFraction(1);requestId.current=null;if(result.analysis.meal_type!=='unknown')setMealType(result.analysis.meal_type);}
+    finally{setAnalyzing(false);}
   });}
   function changeFraction(value:number){setFraction(value);if(analysis)setKcal(String(Math.round(analysis.total_kcal*value)));requestId.current=null;}
   async function saveMeal(e:FormEvent){e.preventDefault();await run(async()=>{
@@ -118,7 +124,8 @@ export default function Dashboard() {
       <div className="main-grid"><div>
       <section className="card" id="meal-entry"><div className="section-title"><div><p className="eyebrow">MEAL NOTE</p><h2>{edit?'食事の記録を修正':'食事を記録する'}</h2></div><span className="tag">写真・文章・手入力</span></div>
       <form onSubmit={saveMeal}><fieldset disabled={busy}><label>食べたもの・量<textarea value={text} maxLength={2000} required onChange={e=>{setText(e.target.value);mealChanged();}} placeholder="例：スンデクッパ定食。ご飯は半分、スープは1/3残した" rows={3}/></label>
-        <div className="photo-row"><label className="photo-button"><span>＋ 写真を追加</span><input ref={photoRef} type="file" accept="image/*" multiple disabled={busy||images.length>=MAX_MEAL_IMAGES} aria-label="食事の写真を追加（複数選択できます）" aria-describedby="photo-help" onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value='';void selectPhotos(files);}}/></label><button type="button" className="secondary" disabled={(!text.trim()&&!images.length)||busy} onClick={()=>void run(async()=>{const result=await api('/api/meals/analyze',{method:'POST',body:JSON.stringify({text,images})});setAnalysis(result.analysis);if(!text.trim())setText(result.analysis.items.map((item:{name:string})=>item.name).join('、'));setKcal(String(result.analysis.total_kcal));setFraction(1);requestId.current=null;if(result.analysis.meal_type!=='unknown')setMealType(result.analysis.meal_type);})}>{busy?'処理中…':'カロリーを推定'}</button></div>
+        <div className="photo-row"><label className="photo-button"><span>＋ 写真を追加</span><input ref={photoRef} type="file" accept="image/*" multiple disabled={busy||images.length>=MAX_MEAL_IMAGES} aria-label="食事の写真を追加（複数選択できます）" aria-describedby="photo-help" onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value='';void selectPhotos(files);}}/></label><button type="button" className="secondary" disabled={(!text.trim()&&!images.length)||busy} onClick={()=>void estimateMeal()}>{photoProgress?'写真を準備中…':analyzing?'解析中…':busy?'処理中…':'カロリーを推定'}</button></div>
+        {(photoProgress||analyzing)&&<p className="small muted" role="status">{photoProgress?`写真を準備しています（${photoProgress.completed} / ${photoProgress.total}枚）`:images.length?`${images.length}枚の写真をまとめて解析しています…`:'食事の内容を解析しています…'}</p>}
         <p id="photo-help" className="small muted photo-help">最大{MAX_MEAL_IMAGES}枚まで。一食分の写真をまとめて選べます。写真は解析に使い、保存しません。</p>
         {images.length>0&&<div className="photo-selection"><div className="photo-selection-header"><span className="small" role="status">{images.length} / {MAX_MEAL_IMAGES}枚を選択中</span><button type="button" className="quiet" onClick={()=>{setImages([]);mealChanged();}}>すべて外す</button></div><div className="photo-previews">{images.map((photo,index)=><div className="photo-preview" key={index}><img src={photo} alt={`解析用の食事写真 ${index+1}`}/><button type="button" className="quiet" aria-label={`写真${index+1}を外す`} onClick={()=>{setImages(current=>current.filter((_,i)=>i!==index));mealChanged();}}>外す</button></div>)}</div></div>}
         {analysis&&<div className="estimate"><strong>推定した内訳</strong>{analysis.items.map((item,i)=><div key={i}><div className="estimate-line"><span>{item.name}</span><b>{n(Math.round(item.kcal*fraction))} kcal</b></div>{item.assumption&&<p className="small muted">{item.assumption}</p>}</div>)}<label>食べた割合<select value={fraction} onChange={e=>changeFraction(Number(e.target.value))}><option value={1}>推定量を全部</option><option value={.75}>3/4</option><option value={.5}>半分</option><option value={1/3}>1/3</option><option value={.25}>1/4</option></select></label><p className="small muted">写真からの値は目安です。量と合計を確認してから保存してください。</p></div>}
