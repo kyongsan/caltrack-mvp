@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { tokyoDate, shiftDay, summary, csvCell, type Meal, type Weight, type Energy } from '@/lib/balance';
 import type { MealAnalysis } from '@/lib/meal-ai';
+import { MAX_MEAL_IMAGES, prepareMealPhoto } from '@/lib/meal-images';
 
 type Medication = { id:string; name:string; default_dose:number; unit:string };
 type Records = { meals:Meal[]; weights:Weight[]; energy:Energy[]; medications:Medication[]; medication_logs:{medication_id:string}[]; profile:{target_intake_kcal:number|null} };
@@ -18,7 +19,7 @@ export default function Dashboard() {
   const [date,setDate]=useState(tokyoDate()),[tab,setTab]=useState<'today'|'history'|'settings'>('today');
   const [data,setData]=useState<Records|null>(null),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [text,setText]=useState(''),[kcal,setKcal]=useState(''),[mealType,setMealType]=useState('dinner'),[time,setTime]=useState(dateTime(tokyoDate()));
-  const [image,setImage]=useState<string>(),[analysis,setAnalysis]=useState<MealAnalysis|null>(null),[fraction,setFraction]=useState(1),[edit,setEdit]=useState<string>();
+  const [images,setImages]=useState<string[]>([]),[analysis,setAnalysis]=useState<MealAnalysis|null>(null),[fraction,setFraction]=useState(1),[edit,setEdit]=useState<string>();
   const [weight,setWeight]=useState(''),[bodyFat,setBodyFat]=useState(''),[energy,setEnergy]=useState(''),[estimated,setEstimated]=useState(false),[target,setTarget]=useState('');
   const [deleteId,setDeleteId]=useState<string>();
   const [medName,setMedName]=useState(''),[medDose,setMedDose]=useState(''),[medUnit,setMedUnit]=useState('mg');
@@ -62,13 +63,13 @@ export default function Dashboard() {
     if(error)throw new Error(error.code==='weak_password'?'より安全なパスワードを設定してください。':'パスワードを保存できませんでした。設定用メールからやり直してください。');
     setRecovery(false);history.replaceState(null,'',window.location.pathname);setPassword('');setNotice('パスワードを保存しました。次回からメールアドレスとパスワードでログインできます。');
   }
-  function resetMeal(){setText('');setKcal('');setImage(undefined);setAnalysis(null);setEdit(undefined);setFraction(1);requestId.current=null;setTime(dateTime(date));if(photoRef.current)photoRef.current.value='';}
-  function mealChanged(){requestId.current=null;setAnalysis(null);setFraction(1);}
-  async function selectPhoto(file?:File){if(!file)return; await run(async()=>{
-    if(!file.type.startsWith('image/'))throw new Error('画像ファイルを選んでください');
-    const url=URL.createObjectURL(file);try{const img=await new Promise<HTMLImageElement>((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=()=>reject(new Error('写真を読み込めません。JPEG・PNG形式をお試しください'));img.src=url;});
-      const canvas=document.createElement('canvas'),scale=Math.min(1,1400/Math.max(img.width,img.height));canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);const context=canvas.getContext('2d');if(!context)throw new Error('写真を読み込めません');context.drawImage(img,0,0,canvas.width,canvas.height);const result=canvas.toDataURL('image/jpeg',.8);if(result.length>3500000)throw new Error('写真が大きすぎます。小さい写真を選んでください');setImage(result);mealChanged();
-    }finally{URL.revokeObjectURL(url);}
+  function resetMeal(){setText('');setKcal('');setImages([]);setAnalysis(null);setEdit(undefined);setFraction(1);requestId.current=null;setTime(dateTime(date));if(photoRef.current)photoRef.current.value='';}
+  function mealChanged(){requestId.current=null;if(analysis)setKcal('');setAnalysis(null);setFraction(1);}
+  async function selectPhotos(files:File[]){if(!files.length)return; await run(async()=>{
+    if(images.length+files.length>MAX_MEAL_IMAGES)throw new Error(`写真は一度に${MAX_MEAL_IMAGES}枚まで追加できます。現在${images.length}枚を選択中です`);
+    const added:string[]=[];
+    for(const file of files)added.push(await prepareMealPhoto(file));
+    setImages(current=>Array.from(new Set([...current,...added])));mealChanged();
   });}
   function changeFraction(value:number){setFraction(value);if(analysis)setKcal(String(Math.round(analysis.total_kcal*value)));requestId.current=null;}
   async function saveMeal(e:FormEvent){e.preventDefault();await run(async()=>{
@@ -77,7 +78,7 @@ export default function Dashboard() {
     await api('/api/records',{method:'POST',body:JSON.stringify({kind:'meal',id:edit,request_id:requestId.current,eaten_at:new Date(time+'+09:00').toISOString(),original_text:text,meal_type:mealType,total_kcal:Number(kcal),protein_g:analysis?.protein_g==null?null:analysis.protein_g*fraction,fat_g:analysis?.fat_g==null?null:analysis.fat_g*fraction,carbs_g:analysis?.carbs_g==null?null:analysis.carbs_g*fraction})});
     resetMeal();setNotice(edit?'食事の記録を更新しました':'食事を保存しました');await reload();
   });}
-  function startEdit(meal:Meal){setEdit(meal.id);setText(meal.original_text||'食事');setKcal(String(meal.total_kcal));setMealType(meal.meal_type||'dinner');setTime(`${tokyoDate(new Date(meal.eaten_at))}T${new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(meal.eaten_at))}`);setImage(undefined);setAnalysis(null);requestId.current=null;document.getElementById('meal-entry')?.scrollIntoView({behavior:'smooth'});}
+  function startEdit(meal:Meal){setEdit(meal.id);setText(meal.original_text||'食事');setKcal(String(meal.total_kcal));setMealType(meal.meal_type||'dinner');setTime(`${tokyoDate(new Date(meal.eaten_at))}T${new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(meal.eaten_at))}`);setImages([]);setAnalysis(null);setFraction(1);if(photoRef.current)photoRef.current.value='';requestId.current=null;document.getElementById('meal-entry')?.scrollIntoView({behavior:'smooth'});}
   const daily=data?summary(data.meals,data.energy,date,data.profile.target_intake_kcal===null?null:Number(data.profile.target_intake_kcal)):null;
   const todayMeals=data?.meals.filter(m=>tokyoDate(new Date(m.eaten_at))===date)||[];
   const latestWeight=data?.weights.at(-1);
@@ -117,8 +118,9 @@ export default function Dashboard() {
       <div className="main-grid"><div>
       <section className="card" id="meal-entry"><div className="section-title"><div><p className="eyebrow">MEAL NOTE</p><h2>{edit?'食事の記録を修正':'食事を記録する'}</h2></div><span className="tag">写真・文章・手入力</span></div>
       <form onSubmit={saveMeal}><fieldset disabled={busy}><label>食べたもの・量<textarea value={text} maxLength={2000} required onChange={e=>{setText(e.target.value);mealChanged();}} placeholder="例：スンデクッパ定食。ご飯は半分、スープは1/3残した" rows={3}/></label>
-        <div className="photo-row"><label className="photo-button"><span>＋ 写真を追加</span><input ref={photoRef} type="file" accept="image/*" onChange={e=>void selectPhoto(e.target.files?.[0])}/></label><button type="button" className="secondary" disabled={(!text.trim()&&!image)||busy} onClick={()=>void run(async()=>{const result=await api('/api/meals/analyze',{method:'POST',body:JSON.stringify({text,image})});setAnalysis(result.analysis);if(!text.trim())setText(result.analysis.items.map((item:{name:string})=>item.name).join('、'));setKcal(String(result.analysis.total_kcal));setFraction(1);requestId.current=null;if(result.analysis.meal_type!=='unknown')setMealType(result.analysis.meal_type);})}>{busy?'処理中…':'カロリーを推定'}</button></div>
-        {image&&<div className="photo-preview"><img src={image} alt="解析用に選んだ食事の写真"/><button type="button" className="quiet" onClick={()=>{setImage(undefined);mealChanged();}}>写真を外す</button></div>}
+        <div className="photo-row"><label className="photo-button"><span>＋ 写真を追加</span><input ref={photoRef} type="file" accept="image/*" multiple disabled={busy||images.length>=MAX_MEAL_IMAGES} aria-label="食事の写真を追加（複数選択できます）" aria-describedby="photo-help" onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value='';void selectPhotos(files);}}/></label><button type="button" className="secondary" disabled={(!text.trim()&&!images.length)||busy} onClick={()=>void run(async()=>{const result=await api('/api/meals/analyze',{method:'POST',body:JSON.stringify({text,images})});setAnalysis(result.analysis);if(!text.trim())setText(result.analysis.items.map((item:{name:string})=>item.name).join('、'));setKcal(String(result.analysis.total_kcal));setFraction(1);requestId.current=null;if(result.analysis.meal_type!=='unknown')setMealType(result.analysis.meal_type);})}>{busy?'処理中…':'カロリーを推定'}</button></div>
+        <p id="photo-help" className="small muted photo-help">最大{MAX_MEAL_IMAGES}枚まで。一食分の写真をまとめて選べます。写真は解析に使い、保存しません。</p>
+        {images.length>0&&<div className="photo-selection"><div className="photo-selection-header"><span className="small" role="status">{images.length} / {MAX_MEAL_IMAGES}枚を選択中</span><button type="button" className="quiet" onClick={()=>{setImages([]);mealChanged();}}>すべて外す</button></div><div className="photo-previews">{images.map((photo,index)=><div className="photo-preview" key={index}><img src={photo} alt={`解析用の食事写真 ${index+1}`}/><button type="button" className="quiet" aria-label={`写真${index+1}を外す`} onClick={()=>{setImages(current=>current.filter((_,i)=>i!==index));mealChanged();}}>外す</button></div>)}</div></div>}
         {analysis&&<div className="estimate"><strong>推定した内訳</strong>{analysis.items.map((item,i)=><div key={i}><div className="estimate-line"><span>{item.name}</span><b>{n(Math.round(item.kcal*fraction))} kcal</b></div>{item.assumption&&<p className="small muted">{item.assumption}</p>}</div>)}<label>食べた割合<select value={fraction} onChange={e=>changeFraction(Number(e.target.value))}><option value={1}>推定量を全部</option><option value={.75}>3/4</option><option value={.5}>半分</option><option value={1/3}>1/3</option><option value={.25}>1/4</option></select></label><p className="small muted">写真からの値は目安です。量と合計を確認してから保存してください。</p></div>}
         <div className="form-grid"><label>合計カロリー（kcal）<input type="number" inputMode="decimal" min="0" max="20000" step="any" value={kcal} required placeholder="例：650" onChange={e=>{setKcal(e.target.value);setAnalysis(null);requestId.current=null;}}/></label><label>食事区分<select value={mealType} onChange={e=>{setMealType(e.target.value);requestId.current=null;}}>{Object.entries(mealNames).map(([key,name])=><option key={key} value={key}>{name}</option>)}</select></label><label className="wide">食べた日時（日本時間）<input type="datetime-local" required value={time} onChange={e=>{setTime(e.target.value);requestId.current=null;}}/></label></div>
         <button className="primary full" type="submit" disabled={busy}>{busy?'処理中…':edit?'修正を保存':'確認して保存'}</button>{edit&&<button className="quiet full" type="button" onClick={resetMeal}>修正をキャンセル</button>}

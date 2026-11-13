@@ -4,6 +4,7 @@ import { GET, POST, DELETE } from '../app/api/records/route';
 import { POST as analyze } from '../app/api/meals/analyze/route';
 import { GET as health } from '../app/api/setup/health/route';
 import { requireUser, ApiError } from '../lib/server';
+import { MAX_MEAL_IMAGES, MAX_MEAL_IMAGES_LENGTH, MAX_MEAL_BODY_BYTES } from '../lib/meal-images';
 const url='https://caltrack-test.invalid';
 const req=(method='GET',body?:unknown,token?:string)=>new Request(`${url}/api/records`,{method,headers:{...(token?{Authorization:`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})});
 test('records, analysis and connection checks reject unauthenticated access',async()=>{
@@ -38,4 +39,32 @@ test('provisioned auth identity selects its own profile rather than any client-s
   });
   const {user}=await requireUser(req('POST',{user_id:'someone-else'},'owner-token'));
   assert.equal(user.id,'owner-profile');
+});
+test('photo analysis accepts a full batch and legacy single photos, but rejects invalid and oversized batches before AI',async(t)=>{
+  process.env.NEXT_PUBLIC_SUPABASE_URL=url;process.env.SUPABASE_SERVICE_ROLE_KEY='test-server-key';process.env.OPENAI_API_KEY='test-only-key';
+  const aiPayloads:any[]=[];
+  t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+    const target=String(input);
+    if(target.includes('/auth/v1/user'))return Response.json({id:'owner-auth',email:'owner@example.invalid',email_confirmed_at:'2026-10-24T00:00:00Z',is_anonymous:false});
+    if(target.includes('/rest/v1/users'))return Response.json({id:'owner-profile',auth_user_id:'owner-auth'});
+    assert.equal(target,'https://api.openai.com/v1/responses');aiPayloads.push(JSON.parse(String(init?.body)));
+    return Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({meal_type:'dinner',items:[{name:'食事',amount:null,unit:null,kcal:400,protein_g:null,fat_g:null,carbs_g:null,assumption:'推定'}],total_kcal:400,protein_g:null,fat_g:null,carbs_g:null})}]}]});
+  });
+  const photo='data:image/jpeg;base64,AAAA';
+  assert.equal((await analyze(req('POST',{text:'',images:Array(MAX_MEAL_IMAGES).fill(photo)},'owner-token'))).status,200);
+  assert.equal(aiPayloads[0].input[0].content.filter((part:{type:string})=>part.type==='input_image').length,MAX_MEAL_IMAGES);
+  assert.equal((await analyze(req('POST',{text:'',image:photo},'owner-token'))).status,200);
+  assert.equal((await analyze(req('POST',{text:'ご飯',images:[]},'owner-token'))).status,200);
+  const calls=aiPayloads.length;
+  for(const input of [
+    {text:'',images:Array(MAX_MEAL_IMAGES+1).fill(photo)},
+    {text:'',images:['https://example.invalid/private.jpg']},
+    {text:'',images:[]},
+    {text:'',image:photo,images:[photo]},
+  ])assert.equal((await analyze(req('POST',input,'owner-token'))).status,400);
+  const large='data:image/jpeg;base64,'+'A'.repeat(Math.floor(MAX_MEAL_IMAGES_LENGTH/2));
+  assert.equal((await analyze(req('POST',{text:'',images:[large,large]},'owner-token'))).status,413);
+  const oversized=new Request(url+'/api/meals/analyze',{method:'POST',headers:{Authorization:'Bearer owner-token','Content-Length':String(MAX_MEAL_BODY_BYTES+1)},body:'{}'});
+  assert.equal((await analyze(oversized)).status,413);
+  assert.equal(aiPayloads.length,calls);
 });

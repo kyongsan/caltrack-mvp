@@ -16,3 +16,13 @@ test('AI rejects incomplete and empty results instead of saving invented zero ca
   t.mock.method(globalThis,'fetch',async()=>Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({meal_type:'unknown',items:[],total_kcal:0,protein_g:null,fat_g:null,carbs_g:null})}]}]}));
   await assert.rejects(()=>analyzeMeal(undefined,'食事'));
 });
+test('AI receives every meal photo together with overlap and portion instructions',async(t)=>{
+  process.env.OPENAI_API_KEY='test-only-key';let payload:Record<string,any>={};
+  t.mock.method(globalThis,'fetch',async(_input:RequestInfo|URL,init?:RequestInit)=>{payload=JSON.parse(String(init?.body));return Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({meal_type:'lunch',items:[item],total_kcal:117,protein_g:2,fat_g:0,carbs_g:26})}]}]});});
+  const images=['data:image/jpeg;base64,AAAA','data:image/png;base64,BBBB','data:image/webp;base64,CCCC'];
+  await analyzeMeal(images,'写真1と2は同じ皿。ご飯は半分');
+  assert.deepEqual(payload.input[0].content.filter((part:{type:string})=>part.type==='input_image').map((part:{image_url:string})=>part.image_url),images);
+  assert.match(payload.input[0].content[0].text,/do not double-count/);
+  assert.match(payload.input[0].content[0].text,/写真1と2は同じ皿/);
+  assert.equal(payload.store,false);
+});

@@ -25,7 +25,7 @@ Enable email authentication in Supabase, set Site URL to the production app, and
 - Settings: daily intake target, medication definitions, and password setup/change.
 - Total energy is the complete daily total (resting + active), never added to active calories again. Missing expenditure or targets remain unknown.
 - Medicines are recorded only; they do not alter calculated calories.
-- Photos are resized locally, sent to OpenAI for estimation with `store:false`, and not retained by this app. Only confirmed totals and nutrition estimates are saved.
+- Select up to 12 meal photos together or add them in batches; preview and remove individual photos before estimation. Photos are compressed locally to fit a combined 3.5 MB base64 budget, sent together to OpenAI with `store:false`, and not retained by this app. The prompt treats them as one meal and asks the model to avoid counting repeated views of the same dish twice. Only confirmed totals and nutrition estimates are saved. The analysis API also accepts the previous single-photo request format.
 - `/setup` reports real connection checks to authenticated users only.
 
 ## Slack
